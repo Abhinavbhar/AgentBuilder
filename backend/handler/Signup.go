@@ -1,7 +1,7 @@
 package handler
 
 import (
-	database "backend/dataBase"
+	database "backend/db"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -12,7 +12,6 @@ import (
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/golang-jwt/jwt/v5"
-	"github.com/joho/godotenv"
 )
 
 type SignupData struct {
@@ -40,6 +39,7 @@ type GoogleTokenInfo struct {
 
 func Signup(c *fiber.Ctx) error {
 	var req SignupData
+	fmt.Println("a req came")
 	if err := c.BodyParser(&req); err != nil || req.Cred == "" {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Missing or invalid credential"})
 	}
@@ -67,22 +67,6 @@ func Signup(c *fiber.Ctx) error {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to parse Google response"})
 	}
 
-	// 1️⃣ Verify issuer
-	if tokenInfo.Issuer != "https://accounts.google.com" && tokenInfo.Issuer != "accounts.google.com" {
-		return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": "Invalid issuer"})
-	}
-
-	// 2️⃣ Verify audience (replace with your actual client ID)
-	const clientID = "59155913835-mp7c1mgg8rvcv60uf6mj5i608cnu42q3.apps.googleusercontent.com"
-	if tokenInfo.Audience != clientID {
-		return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": "Invalid audience"})
-	}
-
-	// 3️⃣ Verify email is confirmed
-	if tokenInfo.EmailVerified != "true" {
-		return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": "Email not verified"})
-	}
-
 	// TODO: Create or fetch user in your DB here
 	var exists bool
 	derr := database.Conn.QueryRow(context.Background(), `SELECT EXISTS(SELECT 1 FROM Users where email=$1)`, tokenInfo.Email).Scan(&exists)
@@ -93,9 +77,8 @@ func Signup(c *fiber.Ctx) error {
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256,
 		jwt.MapClaims{
 			"username": tokenInfo.Name,
-			"exp":      time.Now().Add(time.Hour * 24).Unix(),
+			"exp":      time.Now().Add(time.Hour * 24 * 30).Unix(),
 		})
-	godotenv.Load()
 
 	tokenString, tokenErr := token.SignedString([]byte(os.Getenv("JWT_SECRET")))
 	if tokenErr != nil {
