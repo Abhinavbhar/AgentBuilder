@@ -2,11 +2,9 @@ import React, { useState } from 'react';
 import { Button } from '@/components/ui/button.tsx';
 import { Card, CardContent } from '@/components/ui/card.tsx';
 import { MessageSquare, Zap, Code, Sparkles, ArrowRight, Check, Star, Users, BarChart3, Shield, Rocket } from 'lucide-react';
-import {  useNavigate } from 'react-router-dom';
 import Navbar from '@/components/Navbar';
 export default function LandingPage() {
   const [email, setEmail] = useState('');
-  const navigate=useNavigate()
   const handleSubmit = () => {
     if (email) {
       alert(`Thanks for signing up! We'll reach out to ${email} soon.`);

@@ -16,7 +16,8 @@ func CreateBot(c *fiber.Ctx) error {
 	title := c.FormValue("title")
 	description := c.FormValue("description")
 	noOfFilesStr := c.FormValue("no_of_files")
-
+	email := c.FormValue("email")
+	fmt.Println(email)
 	if title == "" {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
 			"error": "title is required",
@@ -76,7 +77,8 @@ func CreateBot(c *fiber.Ctx) error {
 		uploadedFiles = append(uploadedFiles, objectName)
 	}
 	// sendind to rabbit q
-	SendURLToQueue(uniqueID)
+	qmessage := uniqueID + "mail-:" + email
+	SendURLToQueue(qmessage)
 
 	return c.Status(fiber.StatusOK).JSON(fiber.Map{
 		"message":     "Bot created successfully",

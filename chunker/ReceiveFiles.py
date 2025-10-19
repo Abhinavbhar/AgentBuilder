@@ -1,25 +1,19 @@
 import os
 import io
-import csv
 import pika
 import json
-from pdfminer.high_level import extract_text
-from docx import Document
-from odf.opendocument import load as load_odt
+from sendVectorDb import upload_vectors_to_qdrant
 from odf.text import P
 from minio import Minio
 from langchain.text_splitter import RecursiveCharacterTextSplitter
-try:
-    from sentence_transformers import SentenceTransformer
-except ImportError:
-    print("❌ sentence_transformers not available. Install with: pip install sentence_transformers")
-    SentenceTransformer = None
+from utils import extract_docx_text
+from utils import extract_odt_text
+from utils import extract_csv_text
+from utils import extract_pdf_text
+from utils import extract_txt_text
+from utils import get_embedding_model
+from db import connect_minio
 
-# ================= CONFIG ===================
-MINIO_SERVER = "localhost:9000"
-MINIO_ACCESS_KEY = "admin"
-MINIO_SECRET_KEY = "admin123"
-MINIO_SECURE = False
 
 BUCKET_NAME = "live"
 DOWNLOAD_DIR = "downloads"
@@ -32,156 +26,16 @@ EMBEDDING_MODEL = "all-MiniLM-L6-v2"
 # ============================================
 
 # Initialize embedding model once (for efficiency)
-embedding_model = None
-
-def get_embedding_model():
-    global embedding_model
-    if embedding_model is None:
-        print("🔄 Loading embedding model...")
-        embedding_model = SentenceTransformer(EMBEDDING_MODEL)
-        print("✅ Model loaded.")
-    return embedding_model
-
-# ---------- File extraction functions ----------
-def extract_docx_text(file_bytes):
-    """Extract text from DOCX files."""
-    try:
-        doc = Document(io.BytesIO(file_bytes))
-        return "\n".join([p.text for p in doc.paragraphs])
-    except Exception as e:
-        print(f"❌ Error extracting DOCX: {e}")
-        return ""
-
-def extract_odt_text(file_bytes):
-    """Extract text from ODT files."""
-    try:
-        odt = load_odt(io.BytesIO(file_bytes))
-        texts = []
-        for p in odt.getElementsByType(P):
-            texts.append("".join(
-                node.data for node in p.childNodes 
-                if hasattr(node, 'nodeType') and node.nodeType == node.TEXT_NODE
-            ))
-        return "\n".join(texts)
-    except Exception as e:
-        print(f"❌ Error extracting ODT: {e}")
-        return ""
-
-def extract_csv_text(file_bytes):
-    """Extract text from CSV files."""
-    try:
-        text = file_bytes.decode("utf-8", errors="ignore")
-        rows = []
-        for row in csv.reader(text.splitlines()):
-            rows.append(", ".join(row))
-        return "\n".join(rows)
-    except Exception as e:
-        print(f"❌ Error extracting CSV: {e}")
-        return ""
-
-def extract_pdf_text(file_path):
-    """Extract text from PDF files."""
-    try:
-        return extract_text(file_path)
-    except Exception as e:
-        print(f"❌ Error extracting PDF: {e}")
-        return ""
-
-def extract_txt_text(file_bytes):
-    """Extract text from TXT files."""
-    try:
-        return file_bytes.decode("utf-8", errors="ignore")
-    except Exception as e:
-        print(f"❌ Error extracting TXT: {e}")
-        return ""
-
-# ---------- Download, extract, and embed ----------
-def download_and_create_embeddings(client, object_name):
-    """Download file, extract text, create chunks, and generate embeddings."""
-    local_file = os.path.join(DOWNLOAD_DIR, os.path.basename(object_name))
-    print(f"📥 Downloading: {object_name}")
-    
-    try:
-        client.fget_object(BUCKET_NAME, object_name, local_file)
-    except Exception as e:
-        print(f"❌ Error downloading {object_name}: {e}")
-        return None
-
-    filename = os.path.basename(object_name)
-    ext = filename.split(".")[-1].lower()
-    text = ""
-
-    try:
-        with open(local_file, "rb") as f:
-            content = f.read()
-
-        if ext == "pdf":
-            text = extract_pdf_text(local_file)  # PDF needs file path
-        elif ext == "docx":
-            text = extract_docx_text(content)
-        elif ext == "odt":
-            text = extract_odt_text(content)
-        elif ext == "csv":
-            text = extract_csv_text(content)
-        elif ext == "txt":
-            text = extract_txt_text(content)
-        else:
-            print(f"⚠️ Unsupported file type: {filename}")
-            return None
-
-        if not text.strip():
-            print(f"⚠️ No text extracted from {filename}")
-            return None
-
-    except Exception as e:
-        print(f"❌ Error processing {filename}: {e}")
-        return None
-    finally:
-        # Clean up downloaded file
-        if os.path.exists(local_file):
-            os.remove(local_file)
-
-    # Split text into chunks
-    print(f"✂️ Splitting text into chunks...")
-    splitter = RecursiveCharacterTextSplitter(
-        chunk_size=CHUNK_SIZE,
-        chunk_overlap=CHUNK_OVERLAP,
-        length_function=len,
-    )
-    chunks = splitter.split_text(text)
-    print(f"📦 Created {len(chunks)} chunks from {filename}")
-
-    if not chunks:
-        print(f"⚠️ No chunks created from {filename}")
-        return None
-
-    # Generate embeddings
-    print(f"🧠 Generating embeddings...")
-    model = get_embedding_model()
-    embeddings = model.encode(chunks, show_progress_bar=False)
-    print(f"✅ Generated {len(embeddings)} embeddings for {filename}")
-
-    # Return structured embedding data
-    return {
-        "filename": filename,
-        "object_name": object_name,
-        "num_chunks": len(chunks),
-        "num_embeddings": len(embeddings),
-        "chunks": chunks,
-        "embeddings": embeddings.tolist(),  # Convert numpy array to list for JSON serialization
-    }
-
-# ---------- Process folder ----------
 def process_folder(folder_path):
     """
     Process all files in a MinIO folder, merge text, and generate embeddings.
-    folder_path: e.g., 8d834764-b311-4e1c-ab6a-503cb5b324bc or live/8d834764-b311-4e1c-ab6a-503cb5b324bc
+    folder_path: e.g., 8d834764-b311-4e1c-ab6a-503cb5b324bc
     """
     from urllib.parse import unquote
     
     print(f"\n📂 Processing folder: {folder_path}")
 
-    # Decode URL-encoded paths (e.g., %2F -> /)
+    # Decode URL-encoded paths
     clean_path = unquote(folder_path).strip("/")
     
     # Remove bucket name if included in path
@@ -192,15 +46,12 @@ def process_folder(folder_path):
 
     # Connect to MinIO
     try:
-        client = Minio(
-            MINIO_SERVER,
-            access_key=MINIO_ACCESS_KEY,
-            secret_key=MINIO_SECRET_KEY,
-            secure=MINIO_SECURE
-        )
+        client =connect_minio()
+        print("connected")
     except Exception as e:
         print(f"❌ Error connecting to MinIO: {e}")
         return None
+    
     merged_text = ""
     file_info_list = []
 
@@ -261,7 +112,6 @@ def process_folder(folder_path):
                 print(f"❌ Error processing {obj.object_name}: {e}")
                 continue
             finally:
-                # Clean up downloaded file
                 if os.path.exists(local_file):
                     os.remove(local_file)
 
@@ -288,62 +138,89 @@ def process_folder(folder_path):
 
         # Generate embeddings
         print(f"\n🧠 Generating embeddings for all chunks...")
+        
         model = get_embedding_model()
         embeddings = model.encode(chunks, show_progress_bar=True)
-        print(f"✅ Generated {len(embeddings)} embeddings")
+        
+        # Convert to list once
+        embeddings_list = embeddings.tolist() if hasattr(embeddings, "tolist") else embeddings
+        print(f"✅ Generated {len(embeddings_list)} embeddings")
 
-        # Return structured embedding data
+        # Upload to qdrant
+        upload_vectors_to_qdrant(folder_path, chunks, embeddings_list)
+        
         return {
             "folder": folder_path,
             "files_processed": file_info_list,
             "num_files": len(file_info_list),
             "num_chunks": len(chunks),
-            "num_embeddings": len(embeddings),
+            "num_embeddings": len(embeddings_list),
             "chunks": chunks,
-            "embeddings": embeddings.tolist(),
+            "embeddings": embeddings_list,
             "merged_text": merged_text,
         }
 
     except Exception as e:
         print(f"❌ Error processing folder: {e}")
         return None
-
 # ---------- RabbitMQ Consumer ----------
 def callback(ch, method, properties, body):
     """Callback for RabbitMQ messages."""
-    folder_path = body.decode().strip()
-    print(f"\n🐇 Received folder path: {folder_path}")
-
+    
+    # 1. Decode and strip the incoming body
+    full_string = body.decode().strip()
+    print(f"\n🐇 Received full string: {full_string}")
+    
+    # 2. Split the string using the unique delimiter "mail-:"
     try:
-        embedding_data = process_folder(folder_path)
+        # We only need to split once, at the first occurrence
+        folder_path, email = full_string.split("mail-:", 1)
+        
+        # Strip any accidental whitespace from the extracted parts
+        folder_path = folder_path.strip()
+        email = email.strip()
+        
+        print(f"📁 Extracted folder path: {folder_path}")
+        print(f"📧 Extracted email: {email}")
 
+    except ValueError:
+        # Handle cases where the delimiter "mail-:" is not found
+        print(f"❌ Error: Delimiter 'mail-:' not found in message body: {full_string}")
+        ch.basic_nack(delivery_tag=method.delivery_tag, requeue=False) # Don't requeue a malformed message
+        return # Stop execution for this message
+        
+    # --- Continue with your existing logic using the extracted 'folder_path' ---
+    
+    try:
+        # Note: You now have the 'email' variable available for logging/use if needed
+        embedding_data = process_folder(folder_path) # Use the clean folder_path
+        
         if embedding_data:
             # Optional: Save embeddings metadata to JSON
             output_file = f"embeddings_{os.path.basename(folder_path.strip('/'))}.json"
+            
+            # Use 'email' in the metadata for tracking
+            json_data = {
+                "folder": embedding_data["folder"],
+                "user_email": email, # Added email to metadata
+                "files_processed": embedding_data["files_processed"],
+                "num_files": embedding_data["num_files"],
+                "num_chunks": embedding_data["num_chunks"],
+                "num_embeddings": embedding_data["num_embeddings"],
+            }
+            # ... (rest of file saving logic)
             with open(output_file, "w", encoding="utf-8") as f:
-                json_data = {
-                    "folder": embedding_data["folder"],
-                    "files_processed": embedding_data["files_processed"],
-                    "num_files": embedding_data["num_files"],
-                    "num_chunks": embedding_data["num_chunks"],
-                    "num_embeddings": embedding_data["num_embeddings"],
-                }
                 json.dump(json_data, f, indent=2)
             print(f"📄 Metadata saved to: {output_file}")
-
-            # Here you can:
-            # - Store embeddings in a vector database (Pinecone, Weaviate, Milvus, etc.)
-            # - Use embeddings for similarity search
-            # - Process them further as needed
-            print(f"💾 Ready to store embeddings in vector DB")
+            print(f"💾 Ready to store embeddings in vector DB for user: {email}")
 
         ch.basic_ack(delivery_tag=method.delivery_tag)
         print("✅ Folder processed and message acknowledged.\n")
 
     except Exception as e:
         print(f"❌ Error processing folder: {e}")
+        # Note: Added requeue=True for actual processing errors
         ch.basic_nack(delivery_tag=method.delivery_tag, requeue=True)
-
 def main():
     """Start RabbitMQ consumer."""
     try:

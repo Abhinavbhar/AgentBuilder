@@ -50,7 +50,9 @@ const Signin = () => {
       const res = await fetch('http://localhost:8080/auth/google/signup', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
+        credentials:"include",
         body: JSON.stringify({ credential: response.credential }),
+        
       });
 
       const data = await res.json();

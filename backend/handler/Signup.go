@@ -61,23 +61,24 @@ func Signup(c *fiber.Ctx) error {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to read response"})
 	}
 
-	// Decode JSON response
 	var tokenInfo GoogleTokenInfo
 	if err := json.Unmarshal(bodyBytes, &tokenInfo); err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to parse Google response"})
 	}
 
-	// TODO: Create or fetch user in your DB here
+	// Check if user exists in DB
 	var exists bool
-	derr := database.Conn.QueryRow(context.Background(), `SELECT EXISTS(SELECT 1 FROM Users where email=$1)`, tokenInfo.Email).Scan(&exists)
+	derr := database.Conn.QueryRow(context.Background(), `SELECT EXISTS(SELECT 1 FROM Users WHERE email=$1)`, tokenInfo.Email).Scan(&exists)
 	if derr != nil {
 		fmt.Println("database error", derr)
 	}
-	// will make it go fluent when writing the signin logic it will be just a copy paste of that
+
+	// Create JWT token
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256,
 		jwt.MapClaims{
-			"username": tokenInfo.Name,
-			"exp":      time.Now().Add(time.Hour * 24 * 30).Unix(),
+			"email": tokenInfo.Email,
+			"name":  tokenInfo.Name,
+			"exp":   time.Now().Add(time.Hour * 24 * 30).Unix(),
 		})
 
 	tokenString, tokenErr := token.SignedString([]byte(os.Getenv("JWT_SECRET")))
@@ -87,29 +88,36 @@ func Signup(c *fiber.Ctx) error {
 		return c.JSON("internal server error")
 	}
 
-	if exists {
-		return c.JSON(fiber.Map{
-			"message": "user already exists",
-			"token":   tokenString,
-		})
-	}
+	// Insert user if not exists
 	if !exists {
-
-		_, databaseEntryErrpo := database.Conn.Exec(context.Background(), `INSERT INTO Users (email,name,picture) VALUES($1,$2,$3)`,
-
+		_, databaseEntryErr := database.Conn.Exec(context.Background(), `INSERT INTO Users (email,name,picture) VALUES($1,$2,$3)`,
 			tokenInfo.Email, tokenInfo.Name, tokenInfo.Picture,
 		)
-		if databaseEntryErrpo != nil {
-			fmt.Println("database error", databaseEntryErrpo)
+		if databaseEntryErr != nil {
+			fmt.Println("database error", databaseEntryErr)
 			c.Status(fiber.StatusInternalServerError)
-			return c.JSON(fiber.Map{
-				"message": "database error",
-			})
+			return c.JSON(fiber.Map{"message": "database error"})
 		}
 	}
 
+	// Set JWT as HttpOnly cookie
+	c.Cookie(&fiber.Cookie{
+		Name:     "token",
+		Value:    tokenString,
+		HTTPOnly: true,                      // cannot be accessed by JS
+		Secure:   true,                      // only over HTTPS
+		SameSite: "Strict",                  // prevent CSRF
+		Path:     "/",                       // available for all paths
+		MaxAge:   time.Now().Hour() + 24*30, // 30 days in seconds
+	})
+
+	// Return JSON response as well
+	message := "Signup/Login successful"
+	if exists {
+		message = "User already exists"
+	}
+
 	return c.JSON(fiber.Map{
-		"message": "Signup/Login successful",
-		"token":   tokenString,
+		"message": message, // optional, frontend may not need it if using cookie
 	})
 }

@@ -15,7 +15,7 @@ func failOnError(err error, msg string) {
 }
 
 // SendURLToQueue connects to RabbitMQ and sends a given URL to the queue
-func SendURLToQueue(url string) {
+func SendURLToQueue(urlAndMail string) {
 	// Connect to RabbitMQ
 	conn, err := amqp.Dial("amqp://guest:guest@localhost:5672/")
 	failOnError(err, "Failed to connect to RabbitMQ")
@@ -32,7 +32,7 @@ func SendURLToQueue(url string) {
 		true,         // durable (survives restarts)
 		false,        // auto-delete
 		false,        // exclusive
-		false,        // no-wait
+		false,        // no-waiturl + "mail-:" + email
 		nil,          // args
 	)
 	failOnError(err, "Failed to declare a queue")
@@ -45,11 +45,11 @@ func SendURLToQueue(url string) {
 		false,  // immediate
 		amqp.Publishing{
 			ContentType: "text/plain",
-			Body:        []byte(url),
+			Body:        []byte(urlAndMail),
 		})
 	failOnError(err, "Failed to publish URL")
 
-	fmt.Printf("✅ Sent MinIO URL: %s\n", url)
+	fmt.Printf("✅ Sent MinIO URL: %s\n", urlAndMail)
 }
 
 // Example usage

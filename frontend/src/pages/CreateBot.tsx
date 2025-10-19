@@ -14,8 +14,6 @@ import { Label } from "@/components/ui/label";
 import { toast } from "sonner";
 import Navbar from "@/components/Navbar";
 import { X, Upload, FileText, Trash2, Bot, AlertCircle } from "lucide-react";
-import axios from 'axios';
-
 import { Progress } from "@/components/ui/progress";
 import {
   AlertDialog,
@@ -26,7 +24,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
-
+import { useUserStore } from "@/store/UseUserStore";
 const MAX_FILE_SIZE_MB = 10;
 const MAX_TOTAL_SIZE_BYTES = MAX_FILE_SIZE_MB * 1024 * 1024;
 const ALLOWED_TYPES = [
@@ -48,7 +46,8 @@ export default function CreateBot() {
     message: "",
   });
   const [upload,setUploading]=useState(true)
-
+    const user = useUserStore((state) => state.user);
+  
   const totalSize = files.reduce((sum, file) => sum + file.size, 0);
   const remainingSpace = MAX_TOTAL_SIZE_BYTES - totalSize;
   const usedPercentage = (totalSize / MAX_TOTAL_SIZE_BYTES) * 100;
@@ -175,6 +174,7 @@ export default function CreateBot() {
       const formData = new FormData();
       formData.append("title", botName);
       formData.append("description", description);
+      formData.append("email",user.email.toString())
       formData.append("no_of_files", files.length.toString());
       files.forEach((file, i) => {
         formData.append("file" + i, file);

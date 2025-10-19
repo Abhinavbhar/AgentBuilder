@@ -17,7 +17,6 @@ const Signin = () => {
       if (window.google) {
         window.google.accounts.id.initialize({
           client_id:import.meta.env.GOOGLE_CLIENT_ID,
-          //  '59155913835-fsriapq6kepcj5onlsderoqleahula3e.apps.googleusercontent.com',
           callback: handleCredentialResponse,
           use_fedcm_for_prompt: true, // Enable FedCM
         });
@@ -51,6 +50,7 @@ const Signin = () => {
       const res = await fetch('http://localhost:8080/auth/google/signup', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
+        credentials:"include",
         body: JSON.stringify({ credential: response.credential }),
       });
 
