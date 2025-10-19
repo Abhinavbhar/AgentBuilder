@@ -3,3 +3,8 @@ node_modules/
 dist/
 .vite/
 .vscode/
+# Ignore Python bytecode
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
